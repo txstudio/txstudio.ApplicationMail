@@ -1,0 +1,263 @@
+﻿/*
+USE [master]
+GO
+
+DROP DATABASE [ApplicationMail]
+GO
+*/
+
+CREATE DATABASE [ApplicationMail]
+GO
+
+USE [ApplicationMail]
+GO
+
+CREATE SCHEMA [ApplicationMail]
+GO
+
+CREATE TABLE [ApplicationMail].[ApplicationMailConfig]
+(
+	[No]				INT IDENTITY(1,1),
+	[TimeUtc]			DATETIMEOFFSET(0) DEFAULT (SYSDATETIMEOFFSET()),
+
+	[Host]				VARCHAR(25),
+	[UserName]			VARCHAR(50),
+	[Password]			VARCHAR(50),
+	[Port]				INT,
+	[From]				NVARCHAR(50),
+	[FromDisplayName]	NVARCHAR(100),
+
+	CONSTRAINT [PK_ApplicationMail_ApplicationMailConfig] 
+		PRIMARY KEY CLUSTERED
+		(
+			[No]		ASC
+		)
+)
+GO
+
+CREATE TABLE [ApplicationMail].[ApplicationMailMessage]
+(
+	[No]				INT IDENTITY(1,1),
+	[TimeUtc]			DATETIMEOFFSET(0) DEFAULT (SYSDATETIMEOFFSET()),
+	[TimeProcessed]		DATETIMEOFFSET(0) NULL,
+
+	[IsSuccess]			BIT DEFAULT (0),
+	[IsEnabled]			BIT DEFAULT (1),
+
+	[Subject]			NVARCHAR(150),
+	[Body]				NVARCHAR(500),
+	[Checksum]			VARCHAR(100),
+	[Message]			NVARCHAR(250),
+
+	CONSTRAINT [PK_ApplicationMail_ApplicationMailMessage]
+		PRIMARY KEY CLUSTERED
+		(
+			[No]		ASC
+		)
+)
+GO
+
+CREATE NONCLUSTERED INDEX [IX_ApplicationMail_ApplicationMailMessage_Checksum]
+	ON [ApplicationMail].[ApplicationMailMessage]([Checksum])
+		WHERE [Checksum] IS NOT NULL
+GO
+
+CREATE TABLE [ApplicationMail].[ApplicationMailAddress]
+(
+	[MailMessageNo]		INT,
+	[Index]				TINYINT,
+	[Address]			VARCHAR(50),
+	[DisplayName]		NVARCHAR(50),
+
+	CONSTRAINT [PK_ApplicationMail_ApplicationMailAddress]
+		PRIMARY KEY CLUSTERED
+		(
+			[MailMessageNo]	ASC,
+			[Index]			ASC
+		),
+
+	CONSTRAINT [FK_ApplicationMail_ApplicationMailAddress_MailMessageNo_Address]
+		FOREIGN KEY ([MailMessageNo])
+			REFERENCES [ApplicationMail].[ApplicationMailMessage]([No])
+)
+GO
+
+CREATE TYPE [ApplicationMail].[ApplicationMailAddress]
+	AS TABLE
+(
+	[Index]			TINYINT,
+	[Address]		NVARCHAR(50),
+	[DisplayName]	NVARCHAR(50),
+
+	PRIMARY KEY ([Index] ASC)
+)
+GO
+
+
+CREATE PROCEDURE [ApplicationMail].[GetConfig]
+AS
+
+	SELECT TOP(1) [No]
+		,[Host]
+		,[UserName]
+		,[Password]
+		,[Port]
+		,[From]
+		,[FromDisplayName]
+	FROM [ApplicationMail].[ApplicationMailConfig] a
+	ORDER BY a.[No] DESC
+
+GO
+
+
+CREATE PROCEDURE [ApplicationMail].[GetMailMessageSending]
+AS
+	SELECT [No]
+		,[Subject]
+		,[Body]
+		,[Checksum]
+		,(
+			SELECT b.[Address]
+				,b.[DisplayName]
+			FROM [ApplicationMail].[ApplicationMailAddress] b with (nolock)
+			WHERE b.[MailMessageNo] = a.[No]
+			FOR XML PATH('MailAddress'),TYPE
+		) 
+	FROM [ApplicationMail].[ApplicationMailMessage] a
+	WHERE a.[IsEnabled] = 1
+	FOR XML PATH('MailMessage')
+		,ROOT('MailMessages')
+
+GO
+
+CREATE PROCEDURE [ApplicationMail].[UpdateMailMessage]
+	@No				INT,
+	@IsSuccess		BIT,
+	@Message		NVARCHAR(250),
+	@Result			BIT OUT
+AS
+	
+	SET NOCOUNT ON
+	SET @Result = 1
+
+	BEGIN TRY
+
+		UPDATE [ApplicationMail].[ApplicationMailMessage]
+			SET [TimeProcessed] = SYSDATETIMEOFFSET()
+				,[IsEnabled] = 0
+				,[IsSuccess] = @IsSuccess
+				,[Message] = ISNULL(@Message,'--')
+		WHERE [No] = @No
+
+	END TRY
+
+	BEGIN CATCH
+		SET @Result = 0
+
+	END CATCH
+GO
+
+
+CREATE PROCEDURE [ApplicationMail].[AddMailMessage]
+	@Address		[ApplicationMail].[ApplicationMailAddress] READONLY,
+	@Subject		NVARCHAR(150),
+	@Body			NVARCHAR(500),
+	@Checksum		VARCHAR(100),
+	@No				INT OUT
+AS
+
+
+	SET NOCOUNT ON
+
+	--
+	--如果檢查碼對應的電子郵件已經存在且尚未寄出
+	--@IsEnabled = false
+	--
+
+	INSERT INTO [ApplicationMail].[ApplicationMailMessage] (
+		[Subject]
+		,[Body]
+		,[Checksum]
+	) VALUES (
+		@Subject
+		,@Body
+		,@Checksum
+	)
+
+	SET @No = (
+		SELECT IDENT_CURRENT('ApplicationMail.ApplicationMailMessage')
+	)
+
+	INSERT INTO [ApplicationMail].[ApplicationMailAddress](
+		[MailMessageNo]
+		,[Index]
+		,[Address]
+		,[DisplayName]
+	) SELECT @No
+		,[Index]
+		,[Address]
+		,[DisplayName]
+	FROM @Address
+
+GO
+
+--
+--此為測試使用的 T-SQL 指令碼區塊
+--
+
+INSERT INTO [ApplicationMail].[ApplicationMailConfig]
+	([Host]
+	,[UserName]
+	,[Password]
+	,[Port]
+	,[From]
+	,[FromDisplayName])
+VALUES
+	('mail5.phihong.com.tw'
+	,'<smtp-user>'
+	,'<smtp-password>'
+	,25
+	,'<mail-from>'
+	,'<mail-from-displayName)
+GO
+
+SET NOCOUNT ON
+
+DECLARE @Address [ApplicationMail].[ApplicationMailAddress]
+DECLARE @Subject nvarchar(150)
+DECLARE @Body nvarchar(500)
+DECLARE @Checksum varchar(100)
+DECLARE @No int
+
+DECLARE @loop INT
+DECLARE @loopMAX INT
+
+SET @loop = 0
+SET @loopMAX = 10
+
+WHILE @loop < @loopMAX
+BEGIN
+
+	INSERT INTO @Address ([Index],[Address],[DisplayName])
+		VALUES (0,'<email01>','<displayname>')
+			,(1,'<email02>','<displayname>')
+			,(2,'<email03>','<displayname>')
+
+	SET @Subject = N'應用程式電子郵件服務主旨'
+	SET @Body = N'<h4>標題內容</h4><p>內文內容<br/>內文內容</p>'
+	SET @Checksum = NULL
+
+	EXECUTE [ApplicationMail].[AddMailMessage] 
+	   @Address
+	  ,@Subject
+	  ,@Body
+	  ,@Checksum
+	  ,@No OUTPUT
+
+	SET @loop = @loop + 1
+
+	DELETE FROM @Address
+END
+
+GO
+
